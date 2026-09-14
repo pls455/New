@@ -3,6 +3,7 @@ package com.nova.music.player
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -13,11 +14,11 @@ import java.util.concurrent.CopyOnWriteArraySet
 /**
  * UI-facing controller for Media3.
  * MediaController APIs are main-thread APIs, so every controller call is dispatched
- * through Context.getMainExecutor(). This avoids Media3's wrong-thread exception.
+ * through the application's main executor. This also works on Android 8 (API 26).
  */
 class PlayerController(context: Context) {
     private val appContext = context.applicationContext
-    private val mainExecutor = appContext.mainExecutor
+    private val mainExecutor = ContextCompat.getMainExecutor(appContext)
     private val listeners = CopyOnWriteArraySet<Listener>()
     private val controllerFuture: ListenableFuture<MediaController> =
         MediaController.Builder(
