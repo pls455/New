@@ -7,6 +7,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,11 +20,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -28,7 +37,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -62,7 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,9 +81,13 @@ import com.nova.music.data.MusicLibraryViewModel
 import com.nova.music.data.Track
 import com.nova.music.player.PlayerController
 import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { setContent { NovaApp() } }
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,7 +100,9 @@ class MainActivity : ComponentActivity() {
             add(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        val missing = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
         if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
     }
 }
@@ -97,11 +111,25 @@ class MainActivity : ComponentActivity() {
 private fun NovaApp(libraryViewModel: MusicLibraryViewModel = viewModel()) {
     var accent by remember { mutableStateOf(Color(0xFF8B7CFF)) }
     var showSettings by remember { mutableStateOf(false) }
-    val colors = darkColorScheme(primary = accent, secondary = Color(0xFF5CE1E6), background = Color(0xFF08090D), surface = Color(0xFF11131A))
+    val colors = darkColorScheme(
+        primary = accent,
+        secondary = Color(0xFF5CE1E6),
+        background = Color(0xFF07080C),
+        surface = Color(0xFF11131A)
+    )
+
     MaterialTheme(colorScheme = colors) {
         Surface(Modifier.fillMaxSize(), color = colors.background) {
-            if (showSettings) SettingsScreen({ showSettings = false }, accent, { accent = it }, libraryViewModel::refresh)
-            else LibraryHome(libraryViewModel) { showSettings = true }
+            if (showSettings) {
+                SettingsScreen(
+                    onBack = { showSettings = false },
+                    accent = accent,
+                    onAccentChange = { accent = it },
+                    onRefresh = libraryViewModel::refresh
+                )
+            } else {
+                LibraryHome(libraryViewModel, onSettings = { showSettings = true })
+            }
         }
     }
 }
@@ -110,7 +138,7 @@ private fun NovaApp(libraryViewModel: MusicLibraryViewModel = viewModel()) {
 private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit) {
     val tracks by viewModel.tracks.collectAsState()
     val loading by viewModel.loading.collectAsState()
-    val context = LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val player = remember(context) { PlayerController(context) }
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -124,18 +152,33 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
 
     DisposableEffect(player) {
         val listener = object : PlayerController.Listener {
-            override fun onPlaybackStateChanged(isPlayingValue: Boolean, position: Long, duration: Long, currentIndex: Int) {
+            override fun onPlaybackStateChanged(
+                isPlayingValue: Boolean,
+                position: Long,
+                duration: Long,
+                currentIndex: Int
+            ) {
                 isPlaying = isPlayingValue
                 positionMs = position
                 if (duration > 0) durationMs = duration
                 if (currentIndex >= 0) selectedIndex = currentIndex
             }
-            override fun onModeChanged(shuffle: Boolean, repeat: Int) { shuffleEnabled = shuffle; repeatMode = repeat }
-            override fun onPlayerError(message: String) { playerError = message }
+
+            override fun onModeChanged(shuffle: Boolean, repeat: Int) {
+                shuffleEnabled = shuffle
+                repeatMode = repeat
+            }
+
+            override fun onPlayerError(message: String) {
+                playerError = message
+            }
         }
         player.addListener(listener)
         viewModel.refresh()
-        onDispose { player.removeListener(listener); player.release() }
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
     }
 
     LaunchedEffect(selectedIndex, isPlaying) {
@@ -147,112 +190,418 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
 
     val filteredTracks = remember(tracks, query) {
         val q = query.trim().lowercase()
-        if (q.isBlank()) tracks else tracks.filter { it.title.lowercase().contains(q) || it.artist.lowercase().contains(q) || it.album.lowercase().contains(q) }
+        if (q.isBlank()) tracks else tracks.filter {
+            it.title.lowercase().contains(q) ||
+                it.artist.lowercase().contains(q) ||
+                it.album.lowercase().contains(q)
+        }
     }
+
     val selected = selectedIndex?.let { tracks.getOrNull(it) }
     if (selected != null) {
-        NowPlayingScreen(selected, isPlaying, positionMs, durationMs.takeIf { it > 0 } ?: selected.durationMs, shuffleEnabled, repeatMode,
-            { selectedIndex = null }, { player.togglePlayPause() }, { player.seekTo(it.toLong()) }, { player.previous() }, { player.next() },
-            { player.setShuffle(!shuffleEnabled) }, { player.setRepeatMode(if (repeatMode == 0) 1 else if (repeatMode == 1) 2 else 0) })
+        NowPlayingScreen(
+            track = selected,
+            isPlaying = isPlaying,
+            positionMs = positionMs,
+            durationMs = durationMs.takeIf { it > 0 } ?: selected.durationMs,
+            shuffleEnabled = shuffleEnabled,
+            repeatMode = repeatMode,
+            onBack = { selectedIndex = null },
+            onPlayPause = { player.togglePlayPause() },
+            onSeek = { player.seekTo(it.toLong()) },
+            onPrevious = { player.previous() },
+            onNext = { player.next() },
+            onShuffle = { player.setShuffle(!shuffleEnabled) },
+            onRepeat = {
+                player.setRepeatMode(
+                    when (repeatMode) {
+                        0 -> 1
+                        1 -> 2
+                        else -> 0
+                    }
+                )
+            }
+        )
         return
     }
 
-    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF14152A), Color(0xFF08090D), Color(0xFF050507)))).padding(horizontal = 18.dp, vertical = 16.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .background(Color(0xFF07080C))
+            .padding(horizontal = 18.dp)
+    ) {
+        Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             if (searchOpen) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.weight(1f), placeholder = { Text("ابحث عن أغنية أو فنان") }, singleLine = true)
-                    IconButton(onClick = { query = ""; searchOpen = false }) { Icon(Icons.Rounded.Close, "Close") }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("ابحث عن أغنية أو فنان") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    IconButton(onClick = { query = ""; searchOpen = false }) {
+                        Icon(Icons.Rounded.Close, "Close")
+                    }
                 }
             } else {
-                Column(Modifier.weight(1f)) { Text("NOVA", fontSize = 30.sp, fontWeight = FontWeight.Black); Text("YOUR MUSIC. YOUR SPACE.", fontSize = 10.sp, color = Color.White.copy(.48f)) }
+                Column(Modifier.weight(1f)) {
+                    Text("NOVA", fontSize = 32.sp, fontWeight = FontWeight.Black)
+                    Text(
+                        "YOUR MUSIC. YOUR SPACE.",
+                        fontSize = 9.sp,
+                        color = Color.White.copy(.42f),
+                        letterSpacing = 2.sp
+                    )
+                }
                 IconButton(onClick = { searchOpen = true }) { Icon(Icons.Rounded.Search, "Search") }
                 IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
             }
         }
-        Spacer(Modifier.height(20.dp))
-        if (loading && tracks.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), Alignment.Center) { CircularProgressIndicator() }
-        else if (tracks.isEmpty()) EmptyLibrary { viewModel.refresh() }
-        else {
+
+        Spacer(Modifier.height(22.dp))
+        if (loading && tracks.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (tracks.isEmpty()) {
+            EmptyLibrary { viewModel.refresh() }
+        } else {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.Bottom) {
-                Column { Text("Your library", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("${filteredTracks.size} tracks", color = Color.White.copy(.48f), fontSize = 13.sp) }
-                if (query.isNotBlank()) Text("Search results", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp)
+                Column {
+                    Text("Your library", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${filteredTracks.size} tracks",
+                        color = Color.White.copy(.42f),
+                        fontSize = 12.sp
+                    )
+                }
+                if (query.isNotBlank()) {
+                    Text("SEARCH", color = MaterialTheme.colorScheme.secondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
             }
             Spacer(Modifier.height(12.dp))
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
                 items(filteredTracks, key = { it.id }) { track ->
                     val originalIndex = tracks.indexOfFirst { it.id == track.id }
-                    TrackRow(track) { selectedIndex = originalIndex; player.playTrack(tracks.map { it.uri }, originalIndex) }
+                    TrackRow(track) {
+                        selectedIndex = originalIndex
+                        player.playTrack(tracks.map { it.uri }, originalIndex)
+                    }
                 }
             }
         }
-        playerError?.let { Text("تعذر تشغيل الملف: $it", color = Color(0xFFFF8A80), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        playerError?.let {
+            Text(
+                "تعذر تشغيل الملف: $it",
+                color = Color(0xFFFF8A80),
+                fontSize = 11.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(vertical = 6.dp)
+            )
+        }
     }
 }
 
 @Composable
 private fun TrackRow(track: Track, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White.copy(.055f)).clickable(onClick = onClick).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(54.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF25283E)), Alignment.Center) { Icon(Icons.Rounded.MusicNote, null, tint = Color(0xFF9B8CFF)) }
-        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold); Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(.48f), fontSize = 12.sp) }
-        Icon(Icons.Rounded.PlayArrow, null, tint = Color.White.copy(.65f))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.White.copy(.055f))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF332F62), Color(0xFF151722)))),
+            Alignment.Center
+        ) {
+            Icon(Icons.Rounded.MusicNote, null, tint = Color(0xFFB8AEFF))
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Text(
+                track.artist,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = Color.White.copy(.45f),
+                fontSize = 12.sp
+            )
+        }
+        Icon(Icons.Rounded.PlayArrow, null, tint = Color.White.copy(.58f))
     }
 }
 
 @Composable
-private fun NowPlayingScreen(track: Track, isPlaying: Boolean, positionMs: Long, durationMs: Long, shuffleEnabled: Boolean, repeatMode: Int, onBack: () -> Unit, onPlayPause: () -> Unit, onSeek: (Float) -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onShuffle: () -> Unit, onRepeat: () -> Unit) {
+private fun NowPlayingScreen(
+    track: Track,
+    isPlaying: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    shuffleEnabled: Boolean,
+    repeatMode: Int,
+    onBack: () -> Unit,
+    onPlayPause: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit
+) {
+    val transition = rememberInfiniteTransition(label = "novaColor")
+    val motion by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(7000), RepeatMode.Reverse),
+        label = "gradientMotion"
+    )
+    val pulse by transition.animateFloat(
+        initialValue = 0.88f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
+        label = "artPulse"
+    )
+    val base = Color(0xFF7E6CFF)
+    val cyan = Color(0xFF31D7E5)
+    val pink = Color(0xFFE55BFF)
+    val movingA = lerp(base, cyan, motion)
+    val movingB = lerp(pink, base, motion)
     val safeDuration = durationMs.coerceAtLeast(1L)
-    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF25214A), Color(0xFF0B0B12), Color(0xFF050507)))).padding(horizontal = 22.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }; Text("NOW PLAYING", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold); IconButton(onClick = onShuffle) { Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) MaterialTheme.colorScheme.secondary else Color.White) } }
-        Spacer(Modifier.height(38.dp))
-        Box(Modifier.size(290.dp).clip(RoundedCornerShape(34.dp)).background(Brush.linearGradient(listOf(Color(0xFF433D78), Color(0xFF161825)))), Alignment.Center) { Icon(Icons.Rounded.Album, null, Modifier.size(100.dp), tint = Color.White.copy(.82f)) }
-        Spacer(Modifier.height(30.dp)); Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(track.artist, color = Color.White.copy(.52f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(26.dp)); Slider(value = positionMs.coerceIn(0L, safeDuration).toFloat(), onValueChange = onSeek, valueRange = 0f..safeDuration.toFloat(), modifier = Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) { Text(formatDuration(positionMs), fontSize = 11.sp, color = Color.White.copy(.45f)); Text(formatDuration(durationMs), fontSize = 11.sp, color = Color.White.copy(.45f)) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(movingA.copy(alpha = .30f), movingB.copy(alpha = .14f), Color(0xFF05060A)),
+                    radius = 900f
+                )
+            )
+            .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("NOW PLAYING", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text("NOVA", fontSize = 9.sp, color = movingA.copy(.75f), letterSpacing = 2.sp)
+            }
+            IconButton(onClick = onShuffle) {
+                Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) movingA else Color.White.copy(.7f))
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Box(
+            Modifier
+                .size((286 * pulse).dp)
+                .clip(RoundedCornerShape(38.dp))
+                .background(Brush.linearGradient(listOf(movingA, movingB, Color(0xFF11131C)))),
+            Alignment.Center
+        ) {
+            Box(
+                Modifier
+                    .size(244.dp)
+                    .clip(RoundedCornerShape(32.dp))
+                    .background(Color(0xFF0B0C12).copy(.78f)),
+                Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Album, null, Modifier.size(92.dp), tint = movingA.copy(.9f))
+                if (isPlaying) {
+                    Visualizer(movingA, Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(25.dp))
+        Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(track.artist, color = Color.White.copy(.50f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(20.dp))
+
+        Slider(
+            value = positionMs.coerceIn(0L, safeDuration).toFloat(),
+            onValueChange = onSeek,
+            valueRange = 0f..safeDuration.toFloat(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+            Text(formatDuration(positionMs), fontSize = 10.sp, color = Color.White.copy(.42f))
+            Text(formatDuration(durationMs), fontSize = 10.sp, color = Color.White.copy(.42f))
+        }
+
+        Spacer(Modifier.height(13.dp))
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
-            IconButton(onClick = onRepeat) { Icon(Icons.Rounded.Repeat, "Repeat", tint = if (repeatMode != 0) MaterialTheme.colorScheme.secondary else Color.White) }
-            IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, null, Modifier.size(38.dp)) }
-            Surface(Modifier.size(72.dp), CircleShape, color = MaterialTheme.colorScheme.primary) { IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/Pause", Modifier.size(38.dp)) } }
-            IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, null, Modifier.size(38.dp)) }
-            IconButton(onClick = onShuffle) { Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) MaterialTheme.colorScheme.secondary else Color.White) }
+            IconButton(onClick = onRepeat) {
+                Icon(Icons.Rounded.Repeat, "Repeat", tint = if (repeatMode != 0) movingA else Color.White.copy(.75f))
+            }
+            IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, null, Modifier.size(40.dp)) }
+            Surface(Modifier.size(76.dp), CircleShape, color = movingA) {
+                IconButton(onClick = onPlayPause) {
+                    Icon(
+                        if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        "Play/Pause",
+                        Modifier.size(40.dp),
+                        tint = Color.Black.copy(.85f)
+                    )
+                }
+            }
+            IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, null, Modifier.size(40.dp)) }
+            IconButton(onClick = onShuffle) {
+                Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) movingA else Color.White.copy(.75f))
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+@Composable
+private fun Visualizer(color: Color, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "visualizer")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = (PI * 2).toFloat(),
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Restart),
+        label = "bars"
+    )
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
+        repeat(9) { index ->
+            val wave = ((sin(phase + index * .72f) + 1f) / 2f)
+            Box(
+                Modifier
+                    .size(width = 4.dp, height = (6f + wave * 22f).dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(color.copy(alpha = .88f))
+            )
         }
     }
 }
 
 @Composable
-private fun SettingsScreen(onBack: () -> Unit, accent: Color, onAccentChange: (Color) -> Unit, onRefresh: () -> Unit) {
+private fun SettingsScreen(
+    onBack: () -> Unit,
+    accent: Color,
+    onAccentChange: (Color) -> Unit,
+    onRefresh: () -> Unit
+) {
     var showArtist by remember { mutableStateOf(true) }
     var compactRows by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF14152A), Color(0xFF08090D)))).padding(18.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }; Text("الإعدادات", fontSize = 25.sp, fontWeight = FontWeight.Black) }
-        Spacer(Modifier.height(22.dp))
+    Column(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .background(Color(0xFF08090D))
+            .padding(horizontal = 18.dp)
+    ) {
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
+            Text("الإعدادات", fontSize = 25.sp, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.height(20.dp))
         Text("المظهر", color = MaterialTheme.colorScheme.secondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         SettingsCard {
-            Text("Theme Studio", fontWeight = FontWeight.Bold); Text("اختيار لون NOVA الأساسي", color = Color.White.copy(.5f), fontSize = 12.sp); Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { listOf(Color(0xFF8B7CFF), Color(0xFF00B8D4), Color(0xFFFF4D8D), Color(0xFFFFB300)).forEach { color -> Box(Modifier.size(38.dp).clip(CircleShape).background(color).clickable { onAccentChange(color) }) } }
-            Spacer(Modifier.height(8.dp)); Text("اللون الحالي", color = accent, fontSize = 11.sp)
+            Text("Theme Studio", fontWeight = FontWeight.Bold)
+            Text("اختيار لون NOVA الأساسي", color = Color.White.copy(.5f), fontSize = 12.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(Color(0xFF8B7CFF), Color(0xFF00B8D4), Color(0xFFFF4D8D), Color(0xFFFFB300)).forEach { color ->
+                    Box(
+                        Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(color)
+                            .clickable { onAccentChange(color) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("اللون الحالي", color = accent, fontSize = 11.sp)
         }
-        Spacer(Modifier.height(14.dp)); Text("المكتبة", color = MaterialTheme.colorScheme.secondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        SettingsCard { SettingSwitch("إظهار اسم الفنان", showArtist) { showArtist = it }; SettingSwitch("قائمة مضغوطة", compactRows) { compactRows = it }; Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) { Text("تحديث مكتبة الأغاني") } }
-        Spacer(Modifier.height(14.dp)); Text("حول NOVA", color = MaterialTheme.colorScheme.secondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        SettingsCard { Text("NOVA Music", fontSize = 20.sp, fontWeight = FontWeight.Black); Text("مشغل موسيقى محلي يعمل بدون إنترنت أو خدمات سحابية.", color = Color.White.copy(.55f), fontSize = 12.sp); Spacer(Modifier.height(10.dp)); Text("صنع بواسطة كرم - أبو إبراهيم", color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold); Text("© 2026 NOVA", color = Color.White.copy(.35f), fontSize = 11.sp) }
+        Spacer(Modifier.height(14.dp))
+        Text("المكتبة", color = MaterialTheme.colorScheme.secondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        SettingsCard {
+            SettingSwitch("إظهار اسم الفنان", showArtist) { showArtist = it }
+            SettingSwitch("قائمة مضغوطة", compactRows) { compactRows = it }
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) { Text("تحديث مكتبة الأغاني") }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("حول NOVA", color = MaterialTheme.colorScheme.secondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        SettingsCard {
+            Text("NOVA Music", fontSize = 20.sp, fontWeight = FontWeight.Black)
+            Text("مشغل موسيقى محلي يعمل بدون إنترنت أو خدمات سحابية.", color = Color.White.copy(.55f), fontSize = 12.sp)
+            Spacer(Modifier.height(10.dp))
+            Text("صنع بواسطة كرم - أبو إبراهيم", color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+            Text("© 2026 NOVA", color = Color.White.copy(.35f), fontSize = 11.sp)
+        }
     }
 }
 
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) { Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White.copy(.055f)).padding(16.dp), content = content) }
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.White.copy(.055f))
+            .padding(16.dp),
+        content = content
+    )
+}
 
 @Composable
-private fun SettingSwitch(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(title); Switch(checked = checked, onCheckedChange = onCheckedChange) } }
-
-private fun formatDuration(ms: Long): String { val totalSeconds = (ms / 1000).coerceAtLeast(0); return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}" }
+private fun SettingSwitch(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        Arrangement.SpaceBetween,
+        Alignment.CenterVertically
+    ) {
+        Text(title)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
 
 @Composable
 private fun EmptyLibrary(onRefresh: () -> Unit) {
-    Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
-        Box(Modifier.size(92.dp).clip(CircleShape).background(Color(0xFF191B2A)), Alignment.Center) { Icon(Icons.Rounded.LibraryMusic, null, Modifier.size(42.dp), tint = Color(0xFF8B7CFF)) }
-        Spacer(Modifier.height(18.dp)); Text("No music found", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Add audio files to your device and refresh.", color = Color.White.copy(.5f), fontSize = 13.sp); Spacer(Modifier.height(14.dp)); Button(onClick = onRefresh) { Text("Refresh library") }
+    Box(
+        Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Rounded.MusicNote, null, Modifier.size(60.dp), tint = Color(0xFF8B7CFF))
+            Spacer(Modifier.height(12.dp))
+            Text("لا توجد موسيقى", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("اسمح لـ NOVA بالوصول إلى ملفات الصوت على جهازك.", color = Color.White.copy(.48f), fontSize = 12.sp)
+            Spacer(Modifier.height(14.dp))
+            Button(onClick = onRefresh) { Text("تحديث المكتبة") }
+        }
     }
+}
+
+private fun formatDuration(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L).toInt()
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
 }
