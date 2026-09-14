@@ -9,17 +9,23 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.Executors
 
+/**
+ * UI-facing controller for Media3.
+ * MediaController APIs are main-thread APIs, so every controller call is dispatched
+ * through Context.getMainExecutor(). This avoids Media3's wrong-thread exception.
+ */
 class PlayerController(context: Context) {
-    private val executor = Executors.newSingleThreadExecutor()
+    private val appContext = context.applicationContext
+    private val mainExecutor = appContext.mainExecutor
     private val listeners = CopyOnWriteArraySet<Listener>()
     private val controllerFuture: ListenableFuture<MediaController> =
         MediaController.Builder(
-            context.applicationContext,
-            SessionToken(context.applicationContext, ComponentName(context, MusicService::class.java))
+            appContext,
+            SessionToken(appContext, ComponentName(appContext, MusicService::class.java))
         ).buildAsync()
 
+    @Volatile
     private var controller: MediaController? = null
 
     init {
@@ -29,7 +35,7 @@ class PlayerController(context: Context) {
                 notifyState()
                 notifyModes()
             }.onFailure { notifyError(it) }
-        }, executor)
+        }, mainExecutor)
     }
 
     interface Listener {
@@ -76,7 +82,7 @@ class PlayerController(context: Context) {
 
     fun addListener(listener: Listener) {
         listeners += listener
-        executor.execute {
+        mainExecutor.execute {
             notifyState()
             notifyModes()
         }
@@ -87,7 +93,7 @@ class PlayerController(context: Context) {
     }
 
     fun refreshState() {
-        executor.execute { notifyState() }
+        mainExecutor.execute { notifyState() }
     }
 
     fun playTrack(uris: List<Uri>, index: Int) = withController { c ->
@@ -104,30 +110,41 @@ class PlayerController(context: Context) {
     fun togglePlayPause() = withController { controller ->
         if (controller.isPlaying) controller.pause() else controller.play()
     }
+
     fun next() = withController { controller ->
-        if (controller.hasNextMediaItem()) controller.seekToNextMediaItem() else controller.seekTo(0)
+        if (controller.hasNextMediaItem()) controller.seekToNextMediaItem()
+        else if (controller.mediaItemCount > 0) controller.seekTo(0)
         controller.play()
     }
+
     fun previous() = withController { controller ->
-        if (controller.currentPosition > 3000L || !controller.hasPreviousMediaItem()) controller.seekTo(0)
-        else controller.seekToPreviousMediaItem()
+        if (controller.currentPosition > 3000L || !controller.hasPreviousMediaItem()) {
+            controller.seekTo(0)
+        } else {
+            controller.seekToPreviousMediaItem()
+        }
         controller.play()
     }
+
     fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0L)) }
     fun setShuffle(enabled: Boolean) = withController { it.shuffleModeEnabled = enabled }
-    fun setRepeatMode(mode: Int) = withController { it.repeatMode = mode.coerceIn(Player.REPEAT_MODE_OFF, Player.REPEAT_MODE_ALL) }
+    fun setRepeatMode(mode: Int) = withController {
+        it.repeatMode = mode.coerceIn(Player.REPEAT_MODE_OFF, Player.REPEAT_MODE_ALL)
+    }
 
     fun release() {
-        controller?.removeListener(playerListener)
-        MediaController.releaseFuture(controllerFuture)
-        listeners.clear()
-        executor.shutdown()
+        mainExecutor.execute {
+            controller?.removeListener(playerListener)
+            controller = null
+            MediaController.releaseFuture(controllerFuture)
+            listeners.clear()
+        }
     }
 
     private fun withController(action: (MediaController) -> Unit) {
         controllerFuture.addListener({
             runCatching { action(controller ?: controllerFuture.get()) }
                 .onFailure { notifyError(it) }
-        }, executor)
+        }, mainExecutor)
     }
 }
