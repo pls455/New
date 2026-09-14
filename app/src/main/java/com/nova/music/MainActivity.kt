@@ -25,10 +25,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Cached
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Button
@@ -36,21 +41,23 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,9 +71,7 @@ import com.nova.music.player.PlayerController
 class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        if (permissions.values.any { it }) setContent { NovaApp() }
-    }
+    ) { setContent { NovaApp() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,12 +110,38 @@ private fun NovaApp(libraryViewModel: MusicLibraryViewModel = viewModel()) {
 private fun LibraryHome(viewModel: MusicLibraryViewModel) {
     val tracks by viewModel.tracks.collectAsState()
     val loading by viewModel.loading.collectAsState()
-    val player = remember { PlayerController(androidx.compose.ui.platform.LocalContext.current) }
-    var selected by remember { mutableStateOf<Track?>(null) }
+    val context = LocalContext.current
+    val player = remember(context) { PlayerController(context) }
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(player) {
         viewModel.refresh()
         onDispose { player.release() }
+    }
+
+    val selected = selectedIndex?.let { tracks.getOrNull(it) }
+    if (selected != null) {
+        NowPlayingScreen(
+            track = selected,
+            isPlaying = true,
+            onBack = { selectedIndex = null },
+            onPlayPause = { player.pause() },
+            onPrevious = {
+                val current = selectedIndex ?: return@NowPlayingScreen
+                val next = (current - 1 + tracks.size) % tracks.size
+                selectedIndex = next
+                player.playTrack(tracks.map { it.uri }, next)
+            },
+            onNext = {
+                val current = selectedIndex ?: return@NowPlayingScreen
+                val next = (current + 1) % tracks.size
+                selectedIndex = next
+                player.playTrack(tracks.map { it.uri }, next)
+            },
+            onShuffle = { player.setShuffle(true) },
+            onRepeat = { player.setRepeatMode(1) }
+        )
+        return
     }
 
     Column(
@@ -130,7 +161,7 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel) {
         if (loading && tracks.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), Alignment.Center) { CircularProgressIndicator() }
         } else if (tracks.isEmpty()) {
-            EmptyLibrary()
+            EmptyLibrary { viewModel.refresh() }
         } else {
             Text("Your library", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Text("${tracks.size} tracks", color = Color.White.copy(.48f), fontSize = 13.sp)
@@ -138,14 +169,12 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel) {
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(tracks) { index, track ->
                     TrackRow(track) {
-                        selected = track
+                        selectedIndex = index
                         player.playTrack(tracks.map { it.uri }, index)
                     }
                 }
             }
         }
-
-        selected?.let { MiniPlayer(it) }
     }
 }
 
@@ -168,29 +197,67 @@ private fun TrackRow(track: Track, onClick: () -> Unit) {
 }
 
 @Composable
-private fun MiniPlayer(track: Track) {
-    Surface(Modifier.fillMaxWidth().padding(top = 10.dp), shape = RoundedCornerShape(22.dp), color = Color(0xFF191B27)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(48.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFF2B2E4A)), Alignment.Center) {
-                Icon(Icons.Rounded.Album, null, tint = Color(0xFF8B7CFF))
-            }
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(.48f), fontSize = 11.sp)
-            }
-            IconButton(onClick = {}) { Icon(Icons.Rounded.SkipPrevious, null) }
-            IconButton(onClick = {}) {
-                Surface(Modifier.size(42.dp), CircleShape, color = MaterialTheme.colorScheme.primary) {
-                    Icon(Icons.Rounded.PlayArrow, null, Modifier.padding(9.dp))
+private fun NowPlayingScreen(
+    track: Track,
+    isPlaying: Boolean,
+    onBack: () -> Unit,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(listOf(Color(0xFF25214A), Color(0xFF0B0B12), Color(0xFF050507)))
+        ).padding(horizontal = 22.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
+            Text("NOW PLAYING", modifier = Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onShuffle) { Icon(Icons.Rounded.Shuffle, "Shuffle") }
+        }
+        Spacer(Modifier.height(38.dp))
+        Box(
+            Modifier.size(290.dp).clip(RoundedCornerShape(34.dp)).background(
+                Brush.linearGradient(listOf(Color(0xFF433D78), Color(0xFF161825)))
+            ),
+            Alignment.Center
+        ) {
+            Icon(Icons.Rounded.Album, null, Modifier.size(100.dp), tint = Color.White.copy(.82f))
+        }
+        Spacer(Modifier.height(30.dp))
+        Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(track.artist, color = Color.White.copy(.52f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(26.dp))
+        Slider(value = 0f, onValueChange = {}, modifier = Modifier.fillMaxWidth())
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+            Text("0:00", fontSize = 11.sp, color = Color.White.copy(.45f))
+            Text(formatDuration(track.durationMs), fontSize = 11.sp, color = Color.White.copy(.45f))
+        }
+        Spacer(Modifier.height(20.dp))
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
+            IconButton(onClick = onRepeat) { Icon(Icons.Rounded.Repeat, "Repeat") }
+            IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, null, Modifier.size(38.dp)) }
+            Surface(Modifier.size(72.dp), CircleShape, color = MaterialTheme.colorScheme.primary) {
+                IconButton(onClick = onPlayPause) {
+                    Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/Pause", Modifier.size(38.dp))
                 }
             }
-            IconButton(onClick = {}) { Icon(Icons.Rounded.SkipNext, null) }
+            IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, null, Modifier.size(38.dp)) }
+            IconButton(onClick = onShuffle) { Icon(Icons.Rounded.Cached, "Mode") }
         }
     }
 }
 
+private fun formatDuration(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
+}
+
 @Composable
-private fun EmptyLibrary() {
+private fun EmptyLibrary(onRefresh: () -> Unit) {
     Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
         Box(Modifier.size(92.dp).clip(CircleShape).background(Color(0xFF191B2A)), Alignment.Center) {
             Icon(Icons.Rounded.LibraryMusic, null, Modifier.size(42.dp), tint = Color(0xFF8B7CFF))
@@ -199,6 +266,6 @@ private fun EmptyLibrary() {
         Text("No music found", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("Add audio files to your device and refresh.", color = Color.White.copy(.5f), fontSize = 13.sp)
         Spacer(Modifier.height(14.dp))
-        Button(onClick = {}) { Text("Refresh library") }
+        Button(onClick = onRefresh) { Text("Refresh library") }
     }
 }
