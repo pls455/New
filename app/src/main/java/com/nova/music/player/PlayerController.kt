@@ -30,6 +30,12 @@ class PlayerController(context: Context) {
 
     fun play() = controllerFuture.addListener({ runCatching { controllerFuture.get().play() } }, executor)
     fun pause() = controllerFuture.addListener({ runCatching { controllerFuture.get().pause() } }, executor)
+    fun next() = controllerFuture.addListener({ runCatching { controllerFuture.get().seekToNextMediaItem(); controllerFuture.get().play() } }, executor)
+    fun previous() = controllerFuture.addListener({ runCatching { controllerFuture.get().seekToPreviousMediaItem(); controllerFuture.get().play() } }, executor)
+    fun seekTo(positionMs: Long) = controllerFuture.addListener({ runCatching { controllerFuture.get().seekTo(positionMs) } }, executor)
+    fun setShuffle(enabled: Boolean) = controllerFuture.addListener({ runCatching { controllerFuture.get().shuffleModeEnabled = enabled } }, executor)
+    fun setRepeatMode(mode: Int) = controllerFuture.addListener({ runCatching { controllerFuture.get().repeatMode = mode } }, executor)
+
     fun release() {
         MediaController.releaseFuture(controllerFuture)
         executor.shutdown()
