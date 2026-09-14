@@ -7,6 +7,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -14,6 +20,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,18 +77,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nova.music.data.MusicLibraryViewModel
 import com.nova.music.data.Track
 import com.nova.music.player.PlayerController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.PI
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -198,33 +211,83 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
     }
 
     val selected = selectedIndex?.let { tracks.getOrNull(it) }
-    if (selected != null) {
-        NowPlayingScreen(
-            track = selected,
-            isPlaying = isPlaying,
-            positionMs = positionMs,
-            durationMs = durationMs.takeIf { it > 0 } ?: selected.durationMs,
-            shuffleEnabled = shuffleEnabled,
-            repeatMode = repeatMode,
-            onBack = { selectedIndex = null },
-            onPlayPause = { player.togglePlayPause() },
-            onSeek = { player.seekTo(it.toLong()) },
-            onPrevious = { player.previous() },
-            onNext = { player.next() },
-            onShuffle = { player.setShuffle(!shuffleEnabled) },
-            onRepeat = {
-                player.setRepeatMode(
-                    when (repeatMode) {
-                        0 -> 1
-                        1 -> 2
-                        else -> 0
-                    }
+
+    Box(Modifier.fillMaxSize()) {
+        if (selected == null) {
+            LibraryContent(
+                filteredTracks = filteredTracks,
+                tracks = tracks,
+                loading = loading,
+                searchOpen = searchOpen,
+                query = query,
+                playerError = playerError,
+                onSearchOpen = { searchOpen = true },
+                onSearchClose = { query = ""; searchOpen = false },
+                onQueryChange = { query = it },
+                onSettings = onSettings,
+                onRefresh = viewModel::refresh,
+                onTrackClick = { index ->
+                    selectedIndex = index
+                    player.playTrack(tracks.map { it.uri }, index)
+                }
+            )
+
+            AnimatedVisibility(
+                visible = isPlaying && selected != null,
+                enter = fadeIn(tween(180)) + scaleIn(initialScale = .96f, animationSpec = tween(220)),
+                exit = fadeOut(tween(140)) + scaleOut(targetScale = .96f, animationSpec = tween(160)),
+                modifier = Modifier.align(Alignment.BottomCenter).zIndex(5f)
+            ) {
+                MiniPlayer(
+                    track = selected ?: return@AnimatedVisibility,
+                    isPlaying = isPlaying,
+                    onOpen = { selectedIndex = selectedIndex },
+                    onPlayPause = { player.togglePlayPause() }
                 )
             }
-        )
-        return
+        } else {
+            NowPlayingScreen(
+                track = selected,
+                isPlaying = isPlaying,
+                positionMs = positionMs,
+                durationMs = durationMs.takeIf { it > 0 } ?: selected.durationMs,
+                shuffleEnabled = shuffleEnabled,
+                repeatMode = repeatMode,
+                onBack = { selectedIndex = null },
+                onPlayPause = { player.togglePlayPause() },
+                onSeek = { player.seekTo(it.toLong()) },
+                onPrevious = { player.previous() },
+                onNext = { player.next() },
+                onShuffle = { player.setShuffle(!shuffleEnabled) },
+                onRepeat = {
+                    player.setRepeatMode(
+                        when (repeatMode) {
+                            0 -> 1
+                            1 -> 2
+                            else -> 0
+                        }
+                    )
+                }
+            )
+        }
     }
+}
 
+@Composable
+private fun LibraryContent(
+    filteredTracks: List<Track>,
+    tracks: List<Track>,
+    loading: Boolean,
+    searchOpen: Boolean,
+    query: String,
+    playerError: String?,
+    onSearchOpen: () -> Unit,
+    onSearchClose: () -> Unit,
+    onQueryChange: (String) -> Unit,
+    onSettings: () -> Unit,
+    onRefresh: () -> Unit,
+    onTrackClick: (Int) -> Unit
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -239,15 +302,13 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = query,
-                        onValueChange = { query = it },
+                        onValueChange = onQueryChange,
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("ابحث عن أغنية أو فنان") },
                         singleLine = true,
                         shape = RoundedCornerShape(18.dp)
                     )
-                    IconButton(onClick = { query = ""; searchOpen = false }) {
-                        Icon(Icons.Rounded.Close, "Close")
-                    }
+                    IconButton(onClick = onSearchClose) { Icon(Icons.Rounded.Close, "Close") }
                 }
             } else {
                 Column(Modifier.weight(1f)) {
@@ -259,7 +320,7 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
                         letterSpacing = 2.sp
                     )
                 }
-                IconButton(onClick = { searchOpen = true }) { Icon(Icons.Rounded.Search, "Search") }
+                IconButton(onClick = onSearchOpen) { Icon(Icons.Rounded.Search, "Search") }
                 IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
             }
         }
@@ -270,16 +331,12 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
                 CircularProgressIndicator()
             }
         } else if (tracks.isEmpty()) {
-            EmptyLibrary { viewModel.refresh() }
+            EmptyLibrary(onRefresh)
         } else {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.Bottom) {
                 Column {
                     Text("Your library", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "${filteredTracks.size} tracks",
-                        color = Color.White.copy(.42f),
-                        fontSize = 12.sp
-                    )
+                    Text("${filteredTracks.size} tracks", color = Color.White.copy(.42f), fontSize = 12.sp)
                 }
                 if (query.isNotBlank()) {
                     Text("SEARCH", color = MaterialTheme.colorScheme.secondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -287,15 +344,12 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
             }
             Spacer(Modifier.height(12.dp))
             LazyColumn(
-                Modifier.weight(1f),
+                Modifier.weight(1f).padding(bottom = 82.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
                 items(filteredTracks, key = { it.id }) { track ->
                     val originalIndex = tracks.indexOfFirst { it.id == track.id }
-                    TrackRow(track) {
-                        selectedIndex = originalIndex
-                        player.playTrack(tracks.map { it.uri }, originalIndex)
-                    }
+                    TrackRow(track) { onTrackClick(originalIndex) }
                 }
             }
         }
@@ -308,6 +362,54 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel, onSettings: () -> Unit
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(vertical = 6.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun MiniPlayer(
+    track: Track,
+    isPlaying: Boolean,
+    onOpen: () -> Unit,
+    onPlayPause: () -> Unit
+) {
+    val transition = rememberInfiniteTransition(label = "miniPlayer")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = if (isPlaying) 360f else 0f,
+        animationSpec = infiniteRepeatable(tween(12000), RepeatMode.Restart),
+        label = "miniRotation"
+    )
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onOpen),
+        color = Color(0xFF151821).copy(.96f),
+        shadowElevation = 10.dp
+    ) {
+        Row(
+            Modifier.padding(9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .graphicsLayer { rotationZ = rotation }
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(Color(0xFF8B7CFF), Color(0xFF31D7E5)))),
+                Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Album, null, tint = Color.White.copy(.9f), modifier = Modifier.size(25.dp))
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
+                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(.48f), fontSize = 11.sp)
+            }
+            IconButton(onClick = onPlayPause) {
+                Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/Pause")
+            }
         }
     }
 }
@@ -334,13 +436,7 @@ private fun TrackRow(track: Track, onClick: () -> Unit) {
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-            Text(
-                track.artist,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = Color.White.copy(.45f),
-                fontSize = 12.sp
-            )
+            Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(.45f), fontSize = 12.sp)
         }
         Icon(Icons.Rounded.PlayArrow, null, tint = Color.White.copy(.58f))
     }
@@ -366,14 +462,8 @@ private fun NowPlayingScreen(
     val motion by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(7000), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(tween(9000), RepeatMode.Reverse),
         label = "gradientMotion"
-    )
-    val pulse by transition.animateFloat(
-        initialValue = 0.88f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
-        label = "artPulse"
     )
     val base = Color(0xFF7E6CFF)
     val cyan = Color(0xFF31D7E5)
@@ -381,93 +471,123 @@ private fun NowPlayingScreen(
     val movingA = lerp(base, cyan, motion)
     val movingB = lerp(pink, base, motion)
     val safeDuration = durationMs.coerceAtLeast(1L)
+    val dragOffset = remember { Animatable(0f) }
 
-    Column(
+    Box(
         Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .windowInsetsPadding(WindowInsets.navigationBars)
             .background(
                 Brush.radialGradient(
-                    colors = listOf(movingA.copy(alpha = .30f), movingB.copy(alpha = .14f), Color(0xFF05060A)),
+                    colors = listOf(movingA.copy(alpha = .24f), movingB.copy(alpha = .10f), Color(0xFF05060A)),
                     radius = 900f
                 )
             )
-            .padding(horizontal = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("NOW PLAYING", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                Text("NOVA", fontSize = 9.sp, color = movingA.copy(.75f), letterSpacing = 2.sp)
-            }
-            IconButton(onClick = onShuffle) {
-                Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) movingA else Color.White.copy(.7f))
-            }
-        }
-
-        Spacer(Modifier.height(24.dp))
-        Box(
+        Column(
             Modifier
-                .size((286 * pulse).dp)
-                .clip(RoundedCornerShape(38.dp))
-                .background(Brush.linearGradient(listOf(movingA, movingB, Color(0xFF11131C)))),
-            Alignment.Center
-        ) {
-            Box(
-                Modifier
-                    .size(244.dp)
-                    .clip(RoundedCornerShape(32.dp))
-                    .background(Color(0xFF0B0C12).copy(.78f)),
-                Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Album, null, Modifier.size(92.dp), tint = movingA.copy(.9f))
-                if (isPlaying) {
-                    Visualizer(movingA, Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp))
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .graphicsLayer {
+                    translationY = dragOffset.value
+                    alpha = 1f - (dragOffset.value / 700f).coerceIn(0f, .18f)
                 }
-            }
-        }
-
-        Spacer(Modifier.height(25.dp))
-        Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(track.artist, color = Color.White.copy(.50f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(20.dp))
-
-        Slider(
-            value = positionMs.coerceIn(0L, safeDuration).toFloat(),
-            onValueChange = onSeek,
-            valueRange = 0f..safeDuration.toFloat(),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-            Text(formatDuration(positionMs), fontSize = 10.sp, color = Color.White.copy(.42f))
-            Text(formatDuration(durationMs), fontSize = 10.sp, color = Color.White.copy(.42f))
-        }
-
-        Spacer(Modifier.height(13.dp))
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
-            IconButton(onClick = onRepeat) {
-                Icon(Icons.Rounded.Repeat, "Repeat", tint = if (repeatMode != 0) movingA else Color.White.copy(.75f))
-            }
-            IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, null, Modifier.size(40.dp)) }
-            Surface(Modifier.size(76.dp), CircleShape, color = movingA) {
-                IconButton(onClick = onPlayPause) {
-                    Icon(
-                        if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        "Play/Pause",
-                        Modifier.size(40.dp),
-                        tint = Color.Black.copy(.85f)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            if (dragAmount > 0f) {
+                                change.consume()
+                                launch {
+                                    dragOffset.snapTo((dragOffset.value + dragAmount).coerceAtLeast(0f))
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            launch {
+                                if (dragOffset.value > 140f) {
+                                    onBack()
+                                    dragOffset.snapTo(0f)
+                                } else {
+                                    dragOffset.animateTo(0f, tween(220))
+                                }
+                            }
+                        },
+                        onDragCancel = {
+                            launch { dragOffset.animateTo(0f, tween(180)) }
+                        }
                     )
                 }
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("NOW PLAYING", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text("NOVA", fontSize = 9.sp, color = movingA.copy(.75f), letterSpacing = 2.sp)
+                }
+                IconButton(onClick = onShuffle) {
+                    Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) movingA else Color.White.copy(.7f))
+                }
             }
-            IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, null, Modifier.size(40.dp)) }
-            IconButton(onClick = onShuffle) {
-                Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) movingA else Color.White.copy(.75f))
+
+            Spacer(Modifier.height(24.dp))
+            Box(
+                Modifier
+                    .size(286.dp)
+                    .clip(RoundedCornerShape(38.dp))
+                    .background(Brush.linearGradient(listOf(movingA, movingB, Color(0xFF11131C)))),
+                Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .size(244.dp)
+                        .clip(RoundedCornerShape(32.dp))
+                        .background(Color(0xFF0B0C12).copy(.78f)),
+                    Alignment.Center
+                ) {
+                    Icon(Icons.Rounded.Album, null, Modifier.size(92.dp), tint = movingA.copy(.9f))
+                    if (isPlaying) {
+                        Visualizer(movingA, Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp))
+                    }
+                }
             }
+
+            Spacer(Modifier.height(25.dp))
+            Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(track.artist, color = Color.White.copy(.50f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(20.dp))
+
+            Slider(
+                value = positionMs.coerceIn(0L, safeDuration).toFloat(),
+                onValueChange = onSeek,
+                valueRange = 0f..safeDuration.toFloat(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                Text(formatDuration(positionMs), fontSize = 10.sp, color = Color.White.copy(.42f))
+                Text(formatDuration(durationMs), fontSize = 10.sp, color = Color.White.copy(.42f))
+            }
+
+            Spacer(Modifier.height(13.dp))
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
+                IconButton(onClick = onRepeat) {
+                    Icon(Icons.Rounded.Repeat, "Repeat", tint = if (repeatMode != 0) movingA else Color.White.copy(.75f))
+                }
+                IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, null, Modifier.size(40.dp)) }
+                Surface(Modifier.size(76.dp), CircleShape, color = movingA) {
+                    IconButton(onClick = onPlayPause) {
+                        Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/Pause", Modifier.size(40.dp), tint = Color.Black.copy(.85f))
+                    }
+                }
+                IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, null, Modifier.size(40.dp)) }
+                IconButton(onClick = onShuffle) {
+                    Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) movingA else Color.White.copy(.75f))
+                }
+            }
+            Spacer(Modifier.height(10.dp))
         }
-        Spacer(Modifier.height(10.dp))
     }
 }
 
@@ -477,7 +597,7 @@ private fun Visualizer(color: Color, modifier: Modifier = Modifier) {
     val phase by transition.animateFloat(
         initialValue = 0f,
         targetValue = (PI * 2).toFloat(),
-        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Restart),
         label = "bars"
     )
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
@@ -485,9 +605,9 @@ private fun Visualizer(color: Color, modifier: Modifier = Modifier) {
             val wave = ((sin(phase + index * .72f) + 1f) / 2f)
             Box(
                 Modifier
-                    .size(width = 4.dp, height = (6f + wave * 22f).dp)
+                    .size(width = 4.dp, height = (6f + wave * 18f).dp)
                     .clip(RoundedCornerShape(4.dp))
-                    .background(color.copy(alpha = .88f))
+                    .background(color.copy(alpha = .82f))
             )
         }
     }
@@ -524,13 +644,7 @@ private fun SettingsScreen(
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 listOf(Color(0xFF8B7CFF), Color(0xFF00B8D4), Color(0xFFFF4D8D), Color(0xFFFFB300)).forEach { color ->
-                    Box(
-                        Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(color)
-                            .clickable { onAccentChange(color) }
-                    )
+                    Box(Modifier.size(38.dp).clip(CircleShape).background(color).clickable { onAccentChange(color) })
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -572,11 +686,7 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun SettingSwitch(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 5.dp),
-        Arrangement.SpaceBetween,
-        Alignment.CenterVertically
-    ) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
         Text(title)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
@@ -584,10 +694,7 @@ private fun SettingSwitch(title: String, checked: Boolean, onCheckedChange: (Boo
 
 @Composable
 private fun EmptyLibrary(onRefresh: () -> Unit) {
-    Box(
-        Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Rounded.MusicNote, null, Modifier.size(60.dp), tint = Color(0xFF8B7CFF))
             Spacer(Modifier.height(12.dp))
