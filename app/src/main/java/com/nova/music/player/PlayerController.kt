@@ -27,19 +27,29 @@ class PlayerController(context: Context) {
             runCatching {
                 controller = controllerFuture.get().also { it.addListener(playerListener) }
                 notifyState()
+                notifyModes()
             }
         }, executor)
     }
 
     interface Listener {
-        fun onPlaybackStateChanged(isPlaying: Boolean, positionMs: Long, durationMs: Long, currentIndex: Int)
+        fun onPlaybackStateChanged(
+            isPlaying: Boolean,
+            positionMs: Long,
+            durationMs: Long,
+            currentIndex: Int
+        )
         fun onModeChanged(shuffleEnabled: Boolean, repeatMode: Int)
     }
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) = notifyState()
         override fun onPlaybackStateChanged(playbackState: Int) = notifyState()
-        override fun onPositionDiscontinuity(reason: Player.PositionInfo, oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo) = notifyState()
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int
+        ) = notifyState()
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = notifyState()
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = notifyModes()
         override fun onRepeatModeChanged(repeatMode: Int) = notifyModes()
@@ -48,7 +58,14 @@ class PlayerController(context: Context) {
     private fun notifyState() {
         val c = controller ?: return
         val duration = c.duration.coerceAtLeast(0L)
-        listeners.forEach { it.onPlaybackStateChanged(c.isPlaying, c.currentPosition.coerceAtLeast(0L), duration, c.currentMediaItemIndex) }
+        listeners.forEach {
+            it.onPlaybackStateChanged(
+                c.isPlaying,
+                c.currentPosition.coerceAtLeast(0L),
+                duration,
+                c.currentMediaItemIndex
+            )
+        }
     }
 
     private fun notifyModes() {
@@ -58,10 +75,15 @@ class PlayerController(context: Context) {
 
     fun addListener(listener: Listener) {
         listeners += listener
-        executor.execute { notifyState(); notifyModes() }
+        executor.execute {
+            notifyState()
+            notifyModes()
+        }
     }
 
-    fun removeListener(listener: Listener) { listeners -= listener }
+    fun removeListener(listener: Listener) {
+        listeners -= listener
+    }
 
     fun playTrack(uris: List<Uri>, index: Int) = withController { c ->
         c.setMediaItems(uris.map { MediaItem.fromUri(it) }, index, 0L)
@@ -86,6 +108,8 @@ class PlayerController(context: Context) {
     }
 
     private fun withController(action: (MediaController) -> Unit) {
-        controllerFuture.addListener({ runCatching { action(controller ?: controllerFuture.get()) } }, executor)
+        controllerFuture.addListener({
+            runCatching { action(controller ?: controllerFuture.get()) }
+        }, executor)
     }
 }
