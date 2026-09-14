@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -241,7 +242,7 @@ private fun SettingsScreen(onBack: () -> Unit, accent: Color, onAccentChange: (C
 }
 
 @Composable
-private fun SettingsCard(content: @Composable Column.() -> Unit) { Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White.copy(.055f)).padding(16.dp), content = content) }
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) { Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White.copy(.055f)).padding(16.dp), content = content) }
 
 @Composable
 private fun SettingSwitch(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(title); Switch(checked = checked, onCheckedChange = onCheckedChange) } }
