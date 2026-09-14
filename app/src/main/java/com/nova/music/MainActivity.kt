@@ -72,10 +72,20 @@ import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { setContent { NovaApp() } }
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); requestMusicPermissionIfNeeded(); setContent { NovaApp() } }
-    private fun requestMusicPermissionIfNeeded() {
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) permissionLauncher.launch(arrayOf(permission))
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestPermissionsIfNeeded()
+        setContent { NovaApp() }
+    }
+
+    private fun requestPermissionsIfNeeded() {
+        val permissions = buildList {
+            add(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE)
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
     }
 }
 
@@ -122,21 +132,13 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel) {
 
     val selected = selectedIndex?.let { tracks.getOrNull(it) }
     if (selected != null) {
-        NowPlayingScreen(
-            track = selected,
-            isPlaying = isPlaying,
-            positionMs = positionMs,
-            durationMs = durationMs.takeIf { it > 0 } ?: selected.durationMs,
-            shuffleEnabled = shuffleEnabled,
-            repeatMode = repeatMode,
+        NowPlayingScreen(selected, isPlaying, positionMs, durationMs.takeIf { it > 0 } ?: selected.durationMs, shuffleEnabled, repeatMode,
             onBack = { selectedIndex = null },
             onPlayPause = { player.togglePlayPause() },
             onSeek = { value -> positionMs = value.toLong(); player.seekTo(value.toLong()) },
-            onPrevious = { player.previous() },
-            onNext = { player.next() },
+            onPrevious = { player.previous() }, onNext = { player.next() },
             onShuffle = { player.setShuffle(!shuffleEnabled) },
-            onRepeat = { player.setRepeatMode(if (repeatMode == 0) 1 else if (repeatMode == 1) 2 else 0) }
-        )
+            onRepeat = { player.setRepeatMode(if (repeatMode == 0) 1 else if (repeatMode == 1) 2 else 0) })
         return
     }
 
@@ -152,9 +154,7 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel) {
             Text("Your library", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Text("${tracks.size} tracks", color = Color.White.copy(.48f), fontSize = 13.sp)
             Spacer(Modifier.height(12.dp))
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                itemsIndexed(tracks) { index, track -> TrackRow(track) { selectedIndex = index; player.playTrack(tracks.map { it.uri }, index) } }
-            }
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) { itemsIndexed(tracks) { index, track -> TrackRow(track) { selectedIndex = index; player.playTrack(tracks.map { it.uri }, index) } } }
         }
     }
 }
@@ -163,10 +163,7 @@ private fun LibraryHome(viewModel: MusicLibraryViewModel) {
 private fun TrackRow(track: Track, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White.copy(.055f)).clickable(onClick = onClick).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(54.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF25283E)), Alignment.Center) { Icon(Icons.Rounded.MusicNote, null, tint = Color(0xFF9B8CFF)) }
-        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-            Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(.48f), fontSize = 12.sp)
-        }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold); Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(.48f), fontSize = 12.sp) }
         Icon(Icons.Rounded.PlayArrow, null, tint = Color.White.copy(.65f))
     }
 }
@@ -174,20 +171,12 @@ private fun TrackRow(track: Track, onClick: () -> Unit) {
 @Composable
 private fun NowPlayingScreen(track: Track, isPlaying: Boolean, positionMs: Long, durationMs: Long, shuffleEnabled: Boolean, repeatMode: Int, onBack: () -> Unit, onPlayPause: () -> Unit, onSeek: (Float) -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onShuffle: () -> Unit, onRepeat: () -> Unit) {
     val safeDuration = durationMs.coerceAtLeast(1L)
-    val sliderValue = positionMs.coerceIn(0L, safeDuration).toFloat()
     Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF25214A), Color(0xFF0B0B12), Color(0xFF050507)))).padding(horizontal = 22.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
-            Text("NOW PLAYING", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            IconButton(onClick = onShuffle) { Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) MaterialTheme.colorScheme.secondary else Color.White) }
-        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }; Text("NOW PLAYING", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold); IconButton(onClick = onShuffle) { Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (shuffleEnabled) MaterialTheme.colorScheme.secondary else Color.White) } }
         Spacer(Modifier.height(38.dp))
         Box(Modifier.size(290.dp).clip(RoundedCornerShape(34.dp)).background(Brush.linearGradient(listOf(Color(0xFF433D78), Color(0xFF161825)))), Alignment.Center) { Icon(Icons.Rounded.Album, null, Modifier.size(100.dp), tint = Color.White.copy(.82f)) }
-        Spacer(Modifier.height(30.dp))
-        Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(track.artist, color = Color.White.copy(.52f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(26.dp))
-        Slider(value = sliderValue, onValueChange = onSeek, valueRange = 0f..safeDuration.toFloat(), modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(30.dp)); Text(track.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(track.artist, color = Color.White.copy(.52f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(26.dp)); Slider(value = positionMs.coerceIn(0L, safeDuration).toFloat(), onValueChange = onSeek, valueRange = 0f..safeDuration.toFloat(), modifier = Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) { Text(formatDuration(positionMs), fontSize = 11.sp, color = Color.White.copy(.45f)); Text(formatDuration(durationMs), fontSize = 11.sp, color = Color.White.copy(.45f)) }
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
@@ -206,7 +195,6 @@ private fun formatDuration(ms: Long): String { val totalSeconds = (ms / 1000).co
 private fun EmptyLibrary(onRefresh: () -> Unit) {
     Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
         Box(Modifier.size(92.dp).clip(CircleShape).background(Color(0xFF191B2A)), Alignment.Center) { Icon(Icons.Rounded.LibraryMusic, null, Modifier.size(42.dp), tint = Color(0xFF8B7CFF)) }
-        Spacer(Modifier.height(18.dp)); Text("No music found", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("Add audio files to your device and refresh.", color = Color.White.copy(.5f), fontSize = 13.sp); Spacer(Modifier.height(14.dp)); Button(onClick = onRefresh) { Text("Refresh library") }
+        Spacer(Modifier.height(18.dp)); Text("No music found", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Add audio files to your device and refresh.", color = Color.White.copy(.5f), fontSize = 13.sp); Spacer(Modifier.height(14.dp)); Button(onClick = onRefresh) { Text("Refresh library") }
     }
 }
