@@ -16,8 +16,8 @@ class PlayerController(context: Context) {
     private val listeners = CopyOnWriteArraySet<Listener>()
     private val controllerFuture: ListenableFuture<MediaController> =
         MediaController.Builder(
-            context,
-            SessionToken(context, ComponentName(context, MusicService::class.java))
+            context.applicationContext,
+            SessionToken(context.applicationContext, ComponentName(context, MusicService::class.java))
         ).buildAsync()
 
     private var controller: MediaController? = null
@@ -28,18 +28,14 @@ class PlayerController(context: Context) {
                 controller = controllerFuture.get().also { it.addListener(playerListener) }
                 notifyState()
                 notifyModes()
-            }
+            }.onFailure { notifyError(it) }
         }, executor)
     }
 
     interface Listener {
-        fun onPlaybackStateChanged(
-            isPlaying: Boolean,
-            positionMs: Long,
-            durationMs: Long,
-            currentIndex: Int
-        )
+        fun onPlaybackStateChanged(isPlaying: Boolean, positionMs: Long, durationMs: Long, currentIndex: Int)
         fun onModeChanged(shuffleEnabled: Boolean, repeatMode: Int)
+        fun onPlayerError(message: String) {}
     }
 
     private val playerListener = object : Player.Listener {
@@ -53,6 +49,7 @@ class PlayerController(context: Context) {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = notifyState()
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = notifyModes()
         override fun onRepeatModeChanged(repeatMode: Int) = notifyModes()
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) = notifyError(error)
     }
 
     private fun notifyState() {
@@ -73,6 +70,10 @@ class PlayerController(context: Context) {
         listeners.forEach { it.onModeChanged(c.shuffleModeEnabled, c.repeatMode) }
     }
 
+    private fun notifyError(error: Throwable) {
+        listeners.forEach { it.onPlayerError(error.message ?: "Playback error") }
+    }
+
     fun addListener(listener: Listener) {
         listeners += listener
         executor.execute {
@@ -85,20 +86,36 @@ class PlayerController(context: Context) {
         listeners -= listener
     }
 
+    fun refreshState() {
+        executor.execute { notifyState() }
+    }
+
     fun playTrack(uris: List<Uri>, index: Int) = withController { c ->
-        c.setMediaItems(uris.map { MediaItem.fromUri(it) }, index, 0L)
+        if (uris.isEmpty()) return@withController
+        val safeIndex = index.coerceIn(0, uris.lastIndex)
+        c.setMediaItems(uris.map { MediaItem.fromUri(it) }, safeIndex, 0L)
         c.prepare()
+        c.playWhenReady = true
         c.play()
     }
 
     fun play() = withController { it.play() }
     fun pause() = withController { it.pause() }
-    fun togglePlayPause() = withController { if (it.isPlaying) it.pause() else it.play() }
-    fun next() = withController { it.seekToNextMediaItem(); it.play() }
-    fun previous() = withController { it.seekToPreviousMediaItem(); it.play() }
-    fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs) }
+    fun togglePlayPause() = withController { controller ->
+        if (controller.isPlaying) controller.pause() else controller.play()
+    }
+    fun next() = withController { controller ->
+        if (controller.hasNextMediaItem) controller.seekToNextMediaItem() else controller.seekTo(0)
+        controller.play()
+    }
+    fun previous() = withController { controller ->
+        if (controller.currentPosition > 3000L || !controller.hasPreviousMediaItem) controller.seekTo(0)
+        else controller.seekToPreviousMediaItem()
+        controller.play()
+    }
+    fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0L)) }
     fun setShuffle(enabled: Boolean) = withController { it.shuffleModeEnabled = enabled }
-    fun setRepeatMode(mode: Int) = withController { it.repeatMode = mode }
+    fun setRepeatMode(mode: Int) = withController { it.repeatMode = mode.coerceIn(Player.REPEAT_MODE_OFF, Player.REPEAT_MODE_ALL) }
 
     fun release() {
         controller?.removeListener(playerListener)
@@ -110,6 +127,7 @@ class PlayerController(context: Context) {
     private fun withController(action: (MediaController) -> Unit) {
         controllerFuture.addListener({
             runCatching { action(controller ?: controllerFuture.get()) }
+                .onFailure { notifyError(it) }
         }, executor)
     }
 }
