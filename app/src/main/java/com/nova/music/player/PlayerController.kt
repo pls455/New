@@ -105,11 +105,11 @@ class PlayerController(context: Context) {
         if (controller.isPlaying) controller.pause() else controller.play()
     }
     fun next() = withController { controller ->
-        if (controller.hasNextMediaItem) controller.seekToNextMediaItem() else controller.seekTo(0)
+        if (controller.hasNextMediaItem()) controller.seekToNextMediaItem() else controller.seekTo(0)
         controller.play()
     }
     fun previous() = withController { controller ->
-        if (controller.currentPosition > 3000L || !controller.hasPreviousMediaItem) controller.seekTo(0)
+        if (controller.currentPosition > 3000L || !controller.hasPreviousMediaItem()) controller.seekTo(0)
         else controller.seekToPreviousMediaItem()
         controller.play()
     }
